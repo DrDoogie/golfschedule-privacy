@@ -1,0 +1,1313 @@
+//
+//  ContentView.swift
+//  GolfScheduleApp
+//
+//  Created by YoungRok Lee on 5/24/26.
+//
+
+import SwiftUI
+import Combine
+import PhotosUI
+import UniformTypeIdentifiers
+import UIKit
+import LocalAuthentication
+import EventKit
+
+enum DayStatus: String, Codable {
+    case golf
+    case unavailable
+}
+
+struct DateSelection: Identifiable {
+    let id = UUID()
+    let date: Date
+}
+
+struct GolfEvent: Identifiable, Codable {
+    var id: UUID
+    var date: Date
+    var course: String
+    var partners: String
+    var memo: String
+    var status: DayStatus
+    var scoreImageFileName: String?
+    var calendarEventID: String?
+
+    init(
+        id: UUID = UUID(),
+        date: Date,
+        course: String,
+        partners: String,
+        memo: String,
+        status: DayStatus,
+        scoreImageFileName: String? = nil,
+        calendarEventID: String? = nil
+    ) {
+        self.id = id
+        self.date = date
+        self.course = course
+        self.partners = partners
+        self.memo = memo
+        self.status = status
+        self.scoreImageFileName = scoreImageFileName
+        self.calendarEventID = calendarEventID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, date, course, partners, memo, status, scoreImageFileName, calendarEventID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        date = try container.decode(Date.self, forKey: .date)
+        course = try container.decodeIfPresent(String.self, forKey: .course) ?? ""
+        partners = try container.decodeIfPresent(String.self, forKey: .partners) ?? ""
+        memo = try container.decodeIfPresent(String.self, forKey: .memo) ?? ""
+        status = try container.decodeIfPresent(DayStatus.self, forKey: .status) ?? .golf
+        scoreImageFileName = try container.decodeIfPresent(String.self, forKey: .scoreImageFileName)
+        calendarEventID = try container.decodeIfPresent(String.self, forKey: .calendarEventID)
+    }
+}
+
+// MARK: - Apple Calendar Manager
+
+class CalendarManager {
+    static let eventStore = EKEventStore()
+
+    static func requestAccess() {
+
+        let status = EKEventStore.authorizationStatus(for: .event)
+
+        print("Calendar authorization status:", status.rawValue)
+
+        if #available(iOS 17.0, *) {
+
+            eventStore.requestFullAccessToEvents { granted, error in
+
+                DispatchQueue.main.async {
+
+                    if granted {
+
+                        print("Apple Calendar full access granted")
+
+                    } else {
+
+                        print("Apple Calendar full access denied:", error?.localizedDescription ?? "no error")
+
+                    }
+
+                }
+
+            }
+
+        } else {
+
+            eventStore.requestAccess(to: .event) { granted, error in
+
+                DispatchQueue.main.async {
+
+                    if granted {
+
+                        print("Apple Calendar access granted")
+
+                    } else {
+
+                        print("Apple Calendar access denied:", error?.localizedDescription ?? "no error")
+
+                    }
+
+                }
+
+            }
+
+        }
+
+    }
+
+    static func syncGolfEvent(_ event: GolfEvent) -> GolfEvent {
+        var updatedEvent = event
+
+        if event.status != .golf {
+            if let calendarEventID = event.calendarEventID {
+                deleteCalendarEvent(calendarEventID)
+            }
+            updatedEvent.calendarEventID = nil
+            return updatedEvent
+        }
+
+        if let calendarEventID = event.calendarEventID,
+           let calendarEvent = eventStore.event(withIdentifier: calendarEventID) {
+            applyGolfInfo(to: calendarEvent, from: event)
+
+            do {
+                try eventStore.save(calendarEvent, span: .thisEvent)
+                updatedEvent.calendarEventID = calendarEvent.eventIdentifier
+            } catch {
+                print("Calendar update failed:", error)
+            }
+
+            return updatedEvent
+        }
+
+        let calendarEvent = EKEvent(eventStore: eventStore)
+        applyGolfInfo(to: calendarEvent, from: event)
+        calendarEvent.calendar = eventStore.defaultCalendarForNewEvents
+
+        do {
+            try eventStore.save(calendarEvent, span: .thisEvent)
+            updatedEvent.calendarEventID = calendarEvent.eventIdentifier
+        } catch {
+            print("Calendar create failed:", error)
+        }
+
+        return updatedEvent
+    }
+
+    static func deleteCalendarEvent(_ calendarEventID: String) {
+        guard let calendarEvent = eventStore.event(withIdentifier: calendarEventID) else {
+            return
+        }
+
+        do {
+            try eventStore.remove(calendarEvent, span: .thisEvent)
+        } catch {
+            print("Calendar delete failed:", error)
+        }
+    }
+
+    private static func applyGolfInfo(to calendarEvent: EKEvent, from golfEvent: GolfEvent) {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: golfEvent.date)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? golfEvent.date
+
+        let courseTitle = golfEvent.course.isEmpty ? "골프 라운딩" : golfEvent.course
+
+        calendarEvent.title = "⛳️ \(courseTitle)"
+        calendarEvent.startDate = startOfDay
+        calendarEvent.endDate = endOfDay
+        calendarEvent.isAllDay = true
+
+        var notes = "GolfScheduleApp에서 생성한 일정입니다."
+
+        if !golfEvent.memo.isEmpty {
+            notes += "\n\n메모: \(golfEvent.memo)"
+        }
+
+        calendarEvent.notes = notes
+    }
+}
+
+class GolfStore: ObservableObject {
+    //let objectWillChange: ObservableObjectPublisher
+    @Published var revealPrivateInfo = false
+    @Published var events: [GolfEvent] = GolfStore.loadEvents()
+
+    private static let key = "golf_events_local_only"
+
+    static func loadEvents() -> [GolfEvent] {
+        guard let data = UserDefaults.standard.data(forKey: key) else {
+            return []
+        }
+
+        do {
+            return try JSONDecoder().decode([GolfEvent].self, from: data)
+        } catch {
+            print("Load failed:", error)
+            return []
+        }
+    }
+
+    func save() {
+        do {
+            let data = try JSONEncoder().encode(events)
+            UserDefaults.standard.set(data, forKey: GolfStore.key)
+        } catch {
+            print("Save failed:", error)
+        }
+    }
+
+    func event(on date: Date) -> GolfEvent? {
+        events.first {
+            Calendar.current.isDate($0.date, inSameDayAs: date)
+        }
+    }
+
+    func upsert(_ event: GolfEvent) {
+        if let index = events.firstIndex(where: { $0.id == event.id }) {
+            events[index] = event
+        } else {
+            events.append(event)
+        }
+        save()
+    }
+
+    func delete(_ event: GolfEvent) {
+        if let calendarEventID = event.calendarEventID {
+            CalendarManager.deleteCalendarEvent(calendarEventID)
+        }
+
+        events.removeAll { $0.id == event.id }
+        save()
+    }
+
+    func backupData() -> Data {
+        do {
+            return try JSONEncoder().encode(events)
+        } catch {
+            return Data()
+        }
+    }
+
+    func importBackup(_ data: Data) {
+        do {
+            events = try JSONDecoder().decode([GolfEvent].self, from: data)
+            save()
+        } catch {
+            print("Import failed:", error)
+        }
+    }
+
+    func saveScoreImage(_ data: Data) -> String? {
+        let fileName = UUID().uuidString + ".jpg"
+        let url = documentsURL().appendingPathComponent(fileName)
+
+        do {
+            try data.write(to: url)
+            return fileName
+        } catch {
+            print("Image save failed:", error)
+            return nil
+        }
+    }
+
+    func imageURL(fileName: String) -> URL {
+        documentsURL().appendingPathComponent(fileName)
+    }
+
+    private func documentsURL() -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+}
+
+struct BackupDocument: FileDocument {
+    static var readableContentTypes: [UTType] {
+        [.json]
+    }
+
+    var data: Data
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        self.data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
+}
+
+struct ContentView: View {
+    @StateObject private var store = GolfStore()
+
+    var body: some View {
+        TabView {
+            CalendarView()
+                .environmentObject(store)
+                .tabItem {
+                    Label("달력", systemImage: "calendar")
+                }
+
+            RoundListView()
+                .environmentObject(store)
+                .tabItem {
+                    Label("목록", systemImage: "list.bullet")
+                }
+
+            StatsView()
+                .environmentObject(store)
+                .tabItem {
+                    Label("통계", systemImage: "chart.bar")
+                }
+
+            BackupView()
+                .environmentObject(store)
+                .tabItem {
+                    Label("백업", systemImage: "externaldrive")
+                }
+        }
+        .onAppear {
+            CalendarManager.requestAccess()
+        }
+    }
+}
+
+// MARK: - Calendar
+
+struct CalendarView: View {
+    @EnvironmentObject var store: GolfStore
+
+    @State private var monthIndex = 0
+    @State private var selectedDate: DateSelection?
+
+    private let weekdays = ["일", "월", "화", "수", "목", "금", "토"]
+
+    var currentMonth: Date {
+        Calendar.current.date(byAdding: .month, value: monthIndex, to: Date()) ?? Date()
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 8) {
+                HStack {
+                    Button {
+                        withAnimation {
+                            monthIndex -= 1
+                        }
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.title2)
+                    }
+
+                    Spacer()
+
+                    Text(monthTitle(currentMonth))
+                        .font(.title2)
+                        .fontWeight(.bold)
+
+                    Spacer()
+
+                    Button {
+                        withAnimation {
+                            monthIndex += 1
+                        }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.title2)
+                    }
+                }
+                .padding(.horizontal)
+
+                HStack {
+                    ForEach(weekdays, id: \.self) { day in
+                        Text(day)
+                            .font(.headline)
+                            .foregroundColor(day == "일" ? .red : day == "토" ? .blue : .primary)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.horizontal, 4)
+
+                TabView(selection: $monthIndex) {
+                    ForEach(-120...120, id: \.self) { index in
+                        MonthPageView(
+                            monthDate: Calendar.current.date(byAdding: .month, value: index, to: Date()) ?? Date(),
+                            selectedDate: $selectedDate
+                        )
+                        .environmentObject(store)
+                        .tag(index)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+
+                HStack(spacing: 20) {
+                    Label("Golf Round", systemImage: "circle.fill")
+                        .foregroundColor(.green)
+
+                    Label("Unavailable", systemImage: "xmark")
+                        .foregroundColor(.red)
+                }
+                .font(.caption)
+
+                Spacer()
+            }
+            .navigationTitle("골프 스케줄")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if monthIndex != 0 {
+                        Button {
+                            withAnimation {
+                                monthIndex = 0
+                            }
+                        } label: {
+                            Label("오늘", systemImage: "calendar.circle")
+                        }
+                    }
+                }
+            }
+            .sheet(item: $selectedDate) { selection in
+                EventEditorPagerView(initialDate: selection.date)
+                    .environmentObject(store)
+            }
+        }
+    }
+
+    func monthTitle(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "yyyy년 M월"
+        return formatter.string(from: date)
+    }
+}
+
+struct MonthPageView: View {
+    @EnvironmentObject var store: GolfStore
+
+    let monthDate: Date
+    @Binding var selectedDate: DateSelection?
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 7)
+
+    var body: some View {
+        VStack {
+            LazyVGrid(columns: columns, spacing: 4) {
+                ForEach(calendarDays(), id: \.self) { date in
+                    Button {
+                        selectedDate = DateSelection(date: date)
+                    } label: {
+                        DayCell(
+                            date: date,
+                            currentMonth: monthDate,
+                            event: store.event(on: date)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 4)
+
+            Spacer()
+        }
+    }
+
+    func calendarDays() -> [Date] {
+        let calendar = Calendar.current
+        let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: monthDate))!
+        let range = calendar.range(of: .day, in: .month, for: startOfMonth)!
+        let firstWeekday = calendar.component(.weekday, from: startOfMonth)
+
+        var days: [Date] = []
+
+        if firstWeekday > 1 {
+            for i in 0..<(firstWeekday - 1) {
+                if let date = calendar.date(byAdding: .day, value: i - (firstWeekday - 1), to: startOfMonth) {
+                    days.append(date)
+                }
+            }
+        }
+
+        for day in range {
+            if let date = calendar.date(byAdding: .day, value: day - 1, to: startOfMonth) {
+                days.append(date)
+            }
+        }
+
+        while days.count < 42 {
+            if let last = days.last,
+               let next = calendar.date(byAdding: .day, value: 1, to: last) {
+                days.append(next)
+            }
+        }
+
+        return days
+    }
+}
+
+struct DayCell: View {
+    let date: Date
+    let currentMonth: Date
+    let event: GolfEvent?
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text("\(Calendar.current.component(.day, from: date))")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(textColor)
+                .strikethrough(event?.status == .unavailable, color: .red)
+                .frame(width: 38, height: 38)
+                .background(todayBackground)
+                .clipShape(Circle())
+
+            if event?.status == .golf {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 7, height: 7)
+            } else if event?.status == .unavailable {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 7, height: 7)
+            } else {
+                Circle()
+                    .fill(Color.clear)
+                    .frame(width: 7, height: 7)
+            }
+        }
+        .frame(height: 68)
+        .frame(maxWidth: .infinity)
+        .background(cellBackground)
+        .cornerRadius(10)
+    }
+
+    var textColor: Color {
+        if !Calendar.current.isDate(date, equalTo: currentMonth, toGranularity: .month) {
+            return .gray.opacity(0.4)
+        }
+
+        let weekday = Calendar.current.component(.weekday, from: date)
+
+        if weekday == 1 {
+            return .red
+        } else if weekday == 7 {
+            return .blue
+        } else {
+            return .primary
+        }
+    }
+
+    var todayBackground: Color {
+        Calendar.current.isDateInToday(date) ? Color.green.opacity(0.25) : Color.clear
+    }
+
+    var cellBackground: Color {
+        if event?.status == .golf {
+            return Color.green.opacity(0.13)
+        } else if event?.status == .unavailable {
+            return Color.red.opacity(0.10)
+        } else {
+            return Color.gray.opacity(0.06)
+        }
+    }
+}
+
+// MARK: - Event Editor Pager
+
+struct EventEditorPagerView: View {
+    let initialDate: Date
+
+    @State private var dayIndex = 0
+
+    var body: some View {
+        TabView(selection: $dayIndex) {
+            ForEach(-365...365, id: \.self) { index in
+                EventEditorView(
+                    date: Calendar.current.date(byAdding: .day, value: index, to: initialDate) ?? initialDate
+                )
+                .tag(index)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+    }
+}
+
+// MARK: - Editor
+
+struct EventEditorView: View {
+    @EnvironmentObject var store: GolfStore
+    @Environment(\.dismiss) var dismiss
+
+    let date: Date
+
+    @State private var course = ""
+    @State private var partners = ""
+    @State private var memo = ""
+    @State private var status: DayStatus = .golf
+    @State private var editingEvent: GolfEvent?
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var scoreImageFileName: String?
+    @State private var calendarEventID: String?
+    @State private var showScore = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("날짜") {
+                    Text(dateText(date))
+                }
+
+                Section("일정 종류") {
+                    Picker("종류", selection: $status) {
+                        Text("골프 라운딩").tag(DayStatus.golf)
+                        Text("라운딩 불가").tag(DayStatus.unavailable)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                if status == .golf {
+                    Section("라운딩 정보") {
+                        TextField("골프장 이름", text: $course)
+
+                        if store.revealPrivateInfo {
+
+                            TextField(
+
+                                "동반자: 홍길동, 김철수",
+
+                                text: $partners
+
+                            )
+
+                        } else {
+
+                            Button {
+
+                                authenticateToReveal { success in
+
+                                    if success {
+
+                                        store.revealPrivateInfo = true
+
+                                    }
+
+                                }
+
+                            } label: {
+
+                                HStack {
+
+                                    Text("동반자")
+
+                                        .foregroundColor(.primary)
+
+                                    Spacer()
+
+                                    Text(maskedPartnerNames(partners, revealed: false))
+
+                                        .foregroundColor(.secondary)
+
+                                    Image(systemName: "lock.fill")
+
+                                        .foregroundColor(.secondary)
+
+                                }
+
+                            }
+
+                        }
+
+                        TextField("메모 선택", text: $memo)
+                    }
+
+                    Section("스코어 JPG") {
+                        PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                            Text("스코어 이미지 추가/변경")
+                        }
+
+                        if scoreImageFileName != nil {
+                            Button("스코어 보기") {
+                                showScore = true
+                            }
+
+                            Button("스코어 이미지 삭제") {
+                                scoreImageFileName = nil
+                            }
+                            .foregroundColor(.red)
+                        }
+                    }
+                } else {
+                    Section("불가능 사유") {
+                        TextField("메모 선택", text: $memo)
+                    }
+                }
+
+                if let event = editingEvent {
+                    Section {
+                        Button("일정 삭제") {
+                            store.delete(event)
+                            dismiss()
+                        }
+                        .foregroundColor(.red)
+                    }
+                }
+            }
+            .navigationTitle("일정 편집")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        if store.revealPrivateInfo {
+                            store.revealPrivateInfo = false
+                        } else {
+                            authenticateToReveal { success in
+                                if success {
+                                    store.revealPrivateInfo = true
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(
+                            systemName:
+                                store.revealPrivateInfo
+                            ? "lock.open.fill"
+                            : "lock.fill"
+                        )
+                    }
+                }
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("저장") {
+                        save()
+                    }
+                }
+            }
+            .onAppear {
+                loadEvent()
+            }
+            .onChange(of: selectedPhoto) { _, newItem in
+                Task {
+                    if let data = try? await newItem?.loadTransferable(type: Data.self),
+                       let fileName = store.saveScoreImage(data) {
+                        scoreImageFileName = fileName
+                    }
+                }
+            }
+            .sheet(isPresented: $showScore) {
+                if let fileName = scoreImageFileName {
+                    ScoreImageView(imageURL: store.imageURL(fileName: fileName))
+                } else {
+                    Text("스코어 이미지가 없습니다.")
+                }
+            }
+        }
+    }
+
+    func loadEvent() {
+        if let event = store.event(on: date) {
+            editingEvent = event
+            course = event.course
+            partners = event.partners
+            memo = event.memo
+            status = event.status
+            scoreImageFileName = event.scoreImageFileName
+            calendarEventID = event.calendarEventID
+        } else {
+            editingEvent = nil
+            course = ""
+            partners = ""
+            memo = ""
+            status = .golf
+            scoreImageFileName = nil
+            calendarEventID = nil
+        }
+    }
+
+    func save() {
+        let event = GolfEvent(
+            id: editingEvent?.id ?? UUID(),
+            date: date,
+            course: status == .golf ? course : "",
+            partners: status == .golf ? partners : "",
+            memo: memo,
+            status: status,
+            scoreImageFileName: status == .golf ? scoreImageFileName : nil,
+            calendarEventID: calendarEventID
+        )
+
+        let syncedEvent = CalendarManager.syncGolfEvent(event)
+        store.upsert(syncedEvent)
+        dismiss()
+    }
+
+    func dateText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "yyyy년 M월 d일 EEEE"
+        return formatter.string(from: date)
+    }
+}
+
+struct ScoreImageView: View {
+    let imageURL: URL
+
+    var body: some View {
+        NavigationStack {
+            GeometryReader { geometry in
+                ZStack {
+                    Color.black.ignoresSafeArea()
+
+                    if let uiImage = UIImage(contentsOfFile: imageURL.path) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(
+                                width: geometry.size.width,
+                                height: geometry.size.height
+                            )
+                    } else {
+                        Text("이미지를 불러올 수 없습니다.")
+                            .foregroundColor(.white)
+                    }
+                }
+            }
+            .navigationTitle("스코어")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+func maskedPartnerNames(_ text: String, revealed: Bool) -> String {
+    if revealed {
+        return text
+    }
+
+    let names = text
+        .split(separator: ",")
+        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    return names.map { maskName($0) }.joined(separator: ", ")
+}
+
+func maskName(_ name: String) -> String {
+    let chars = Array(name)
+
+    if chars.count <= 1 {
+        return name
+    } else if chars.count == 2 {
+        return "\(chars[0])*"
+    } else {
+        var masked = chars
+        masked[1] = "*"
+        return String(masked)
+    }
+}
+
+// MARK: - Round List
+
+func authenticateToReveal(completion: @escaping (Bool) -> Void) {
+    let context = LAContext()
+    var error: NSError?
+
+    if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {
+        context.evaluatePolicy(
+            .deviceOwnerAuthentication,
+            localizedReason: "동반자 이름 전체를 보려면 인증이 필요합니다."
+        ) { success, _ in
+            DispatchQueue.main.async {
+                completion(success)
+            }
+        }
+    } else {
+        completion(false)
+    }
+}
+
+struct RoundListView: View {
+    @EnvironmentObject var store: GolfStore
+    @State private var selectedYear = Calendar.current.component(.year, from: Date())
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                HStack {
+                    Button {
+                        withAnimation {
+                            selectedYear -= 1
+                        }
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.title2)
+                    }
+
+                    Spacer()
+
+                    Text(String(selectedYear) + "년")
+                        .font(.title2)
+                        .fontWeight(.bold)
+
+                    Spacer()
+
+                    Button {
+                        withAnimation {
+                            selectedYear += 1
+                        }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.title2)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+
+                TabView(selection: $selectedYear) {
+                    ForEach(2000...2050, id: \.self) { year in
+                        RoundListYearPageView(year: year)
+                            .environmentObject(store)
+                            .tag(year)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+            }
+            .navigationTitle("라운드 목록")
+        }
+    }
+}
+
+struct RoundListYearPageView: View {
+    @EnvironmentObject var store: GolfStore
+
+    let year: Int
+
+    @State private var selectedEvent: GolfEvent?
+
+    var golfEvents: [GolfEvent] {
+        store.events
+            .filter {
+                $0.status == .golf &&
+                Calendar.current.component(.year, from: $0.date) == year
+            }
+            .sorted { $0.date < $1.date }
+    }
+
+    var body: some View {
+        Group {
+            if golfEvents.isEmpty {
+                VStack {
+                    Spacer()
+                    Text("라운딩 기록이 없습니다.")
+                        .foregroundColor(.gray)
+                    Spacer()
+                }
+            } else {
+                List {
+                    Section {
+                        Button(
+                            store.revealPrivateInfo
+                            ? "동반자 이름 숨기기"
+                            : "동반자 이름 전체 보기"
+                        ) {
+                            if store.revealPrivateInfo {
+                                store.revealPrivateInfo = false
+                            } else {
+                                authenticateToReveal { success in
+                                    if success {
+                                        store.revealPrivateInfo = true
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ForEach(golfEvents) { event in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(event.course)
+                                .font(.headline)
+
+                            Text(dateText(event.date))
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+
+                            if !event.partners.isEmpty {
+                                Text("동반자: \(maskedPartnerNames(event.partners, revealed: store.revealPrivateInfo))")
+                                    .font(.subheadline)
+                            }
+
+                            if !event.memo.isEmpty {
+                                Text("메모: \(event.memo)")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+
+                            if event.scoreImageFileName != nil {
+                                Text("스코어 이미지 있음")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            }
+
+                            if event.calendarEventID != nil {
+                                Text("Apple 캘린더 동기화됨")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedEvent = event
+                        }
+                    }
+                    .onDelete(perform: delete)
+                }
+            }
+        }
+        .sheet(item: $selectedEvent) { event in
+            EventEditorPagerView(initialDate: event.date)
+                .environmentObject(store)
+        }
+    }
+
+    func delete(at offsets: IndexSet) {
+        let selected = offsets.map { golfEvents[$0] }
+        selected.forEach { store.delete($0) }
+    }
+
+    func dateText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "yyyy년 M월 d일"
+        return formatter.string(from: date)
+    }
+}
+
+// MARK: - Stats
+
+struct StatsView: View {
+    @EnvironmentObject var store: GolfStore
+    @State private var selectedYear = Calendar.current.component(.year, from: Date())
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                HStack {
+                    Button {
+                        withAnimation {
+                            selectedYear -= 1
+                        }
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.title2)
+                    }
+
+                    Spacer()
+
+                    Text(String(selectedYear) + "년")
+                        .font(.title2)
+                        .fontWeight(.bold)
+
+                    Spacer()
+
+                    Button {
+                        withAnimation {
+                            selectedYear += 1
+                        }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.title2)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+
+                TabView(selection: $selectedYear) {
+                    ForEach(2000...2050, id: \.self) { year in
+                        StatsYearPageView(year: year)
+                            .environmentObject(store)
+                            .tag(year)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+            }
+            .navigationTitle("통계")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        if store.revealPrivateInfo {
+                            store.revealPrivateInfo = false
+                        } else {
+                            authenticateToReveal { success in
+                                if success {
+                                    store.revealPrivateInfo = true
+                                }
+                            }
+                        }
+                    } label: {
+                        Image(
+                            systemName:
+                                store.revealPrivateInfo
+                            ? "lock.open.fill"
+                            : "lock.fill"
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct StatsYearPageView: View {
+    @EnvironmentObject var store: GolfStore
+
+    let year: Int
+
+    var golfEvents: [GolfEvent] {
+        store.events.filter {
+            $0.status == .golf
+        }
+    }
+
+    var yearEvents: [GolfEvent] {
+        golfEvents.filter {
+            Calendar.current.component(.year, from: $0.date) == year
+        }
+    }
+
+    var pastYearEvents: [GolfEvent] {
+        yearEvents.filter {
+            $0.date < Date()
+        }
+    }
+
+    var futureYearEvents: [GolfEvent] {
+        yearEvents.filter {
+            $0.date >= Calendar.current.startOfDay(for: Date())
+        }
+    }
+
+    var body: some View {
+        List {
+            Section("라운딩 횟수") {
+                HStack {
+                    Text("전체")
+                    Spacer()
+                    Text("\(yearEvents.count)회")
+                }
+
+                HStack {
+                    Text("과거")
+                    Spacer()
+                    Text("\(pastYearEvents.count)회")
+                }
+
+                HStack {
+                    Text("예정")
+                    Spacer()
+                    Text("\(futureYearEvents.count)회")
+                }
+            }
+
+            Section("자주 가는 골프장") {
+                if rankCourses().isEmpty {
+                    Text("데이터 없음")
+                        .foregroundColor(.gray)
+                } else {
+                    ForEach(rankCourses(), id: \.0) { item in
+                        HStack {
+                            Text(item.0)
+
+                            Spacer()
+
+                            Text("\(item.1)회")
+                        }
+                    }
+                }
+            }
+
+            Section("자주 함께 하는 동반자") {
+                if rankPartners().isEmpty {
+                    Text("데이터 없음")
+                        .foregroundColor(.gray)
+                } else {
+                    ForEach(rankPartners(), id: \.0) { item in
+                        HStack {
+                            Text(
+                                maskedPartnerNames(
+                                    item.0,
+                                    revealed: store.revealPrivateInfo
+                                )
+                            )
+
+                            Spacer()
+
+                            Text("\(item.1)회")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func rankCourses() -> [(String, Int)] {
+        let names = yearEvents.map { $0.course }.filter { !$0.isEmpty }
+
+        return Dictionary(grouping: names, by: { $0 })
+            .map { ($0.key, $0.value.count) }
+            .sorted { $0.1 > $1.1 }
+    }
+
+    func rankPartners() -> [(String, Int)] {
+        let partners = yearEvents.flatMap {
+            $0.partners
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+
+        return Dictionary(grouping: partners, by: { $0 })
+            .map { ($0.key, $0.value.count) }
+            .sorted { $0.1 > $1.1 }
+    }
+}
+
+// MARK: - Backup
+
+struct BackupView: View {
+    @EnvironmentObject var store: GolfStore
+
+    @State private var showExporter = false
+    @State private var showImporter = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Text("데이터 백업 / 가져오기")
+                    .font(.title2)
+                    .fontWeight(.bold)
+
+                Button("백업 파일 만들기") {
+                    showExporter = true
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("백업 파일 가져오기") {
+                    showImporter = true
+                }
+                .buttonStyle(.bordered)
+
+                Text("라운딩 일정은 JSON 파일로 백업됩니다. 스코어 이미지는 앱 내부 저장소에 보관됩니다.")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .padding()
+
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("백업")
+            .fileExporter(
+                isPresented: $showExporter,
+                document: BackupDocument(data: store.backupData()),
+                contentType: .json,
+                defaultFilename: "GolfScheduleBackup"
+            ) { result in
+                print(result)
+            }
+            .fileImporter(
+                isPresented: $showImporter,
+                allowedContentTypes: [.json]
+            ) { result in
+                switch result {
+                case .success(let url):
+                    if url.startAccessingSecurityScopedResource() {
+                        defer {
+                            url.stopAccessingSecurityScopedResource()
+                        }
+
+                        if let data = try? Data(contentsOf: url) {
+                            store.importBackup(data)
+                        }
+                    }
+
+                case .failure:
+                    print("Import failed")
+                }
+            }
+        }
+    }
+}
+
+#Preview {
+    ContentView()
+}
