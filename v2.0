@@ -2,8 +2,9 @@
 //  ContentView.swift
 //  GolfSchedulePro
 //
-//  V2 Sectioned Build
+//  Complete V3 Build
 //
+
 // ======================================================
 // SECTION 01 / Imports & Basic Types
 // ======================================================
@@ -33,10 +34,38 @@ struct DateSelection: Identifiable {
 }
 
 struct PlayerScore: Identifiable, Codable, Equatable {
-    var id: UUID = UUID()
+    var id: UUID
     var name: String
-    var score: Int
+    var score: Int?
     var isMe: Bool
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        score: Int? = nil,
+        isMe: Bool
+    ) {
+        self.id = id
+        self.name = name
+        self.score = score
+        self.isMe = isMe
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, score, isMe
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+
+        let decodedScore = try container.decodeIfPresent(Int.self, forKey: .score)
+        score = (decodedScore != nil && decodedScore! > 0) ? decodedScore : nil
+
+        isMe = try container.decodeIfPresent(Bool.self, forKey: .isMe) ?? false
+    }
 }
 
 struct GolfRound: Identifiable, Codable {
@@ -47,7 +76,7 @@ struct GolfRound: Identifiable, Codable {
     var memo: String
     var status: RoundStatus
     var scores: [PlayerScore]
-    var scoreImageFileName: String?
+    var roundPhotoFileNames: [String]
     var calendarEventID: String?
     var teeTime: Date?
 
@@ -59,7 +88,7 @@ struct GolfRound: Identifiable, Codable {
         memo: String = "",
         status: RoundStatus = .round,
         scores: [PlayerScore] = [],
-        scoreImageFileName: String? = nil,
+        roundPhotoFileNames: [String] = [],
         calendarEventID: String? = nil,
         teeTime: Date? = nil
     ) {
@@ -70,11 +99,77 @@ struct GolfRound: Identifiable, Codable {
         self.memo = memo
         self.status = status
         self.scores = scores
-        self.scoreImageFileName = scoreImageFileName
+        self.roundPhotoFileNames = roundPhotoFileNames
         self.calendarEventID = calendarEventID
         self.teeTime = teeTime
     }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case date
+        case course
+        case partners
+        case memo
+        case status
+        case scores
+        case roundPhotoFileNames
+        case scoreImageFileName
+        case calendarEventID
+        case teeTime
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        date = try container.decode(Date.self, forKey: .date)
+        course = try container.decodeIfPresent(String.self, forKey: .course) ?? ""
+        memo = try container.decodeIfPresent(String.self, forKey: .memo) ?? ""
+
+        partners = []
+        if let partnerArray = try? container.decode([String].self, forKey: .partners) {
+            partners = partnerArray
+        } else if let partnerText = try? container.decode(String.self, forKey: .partners) {
+            partners = partnerText
+                .split(separator: ",")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+
+        let rawStatus = try container.decodeIfPresent(String.self, forKey: .status) ?? "round"
+        status = (rawStatus == "golf" || rawStatus == "round") ? .round : .unavailable
+
+        scores = try container.decodeIfPresent([PlayerScore].self, forKey: .scores) ?? []
+
+        roundPhotoFileNames = []
+        if let photos = try? container.decode([String].self, forKey: .roundPhotoFileNames) {
+            roundPhotoFileNames = photos
+        } else if let oldImage = try? container.decode(String.self, forKey: .scoreImageFileName) {
+            if !oldImage.isEmpty {
+                roundPhotoFileNames = [oldImage]
+            }
+        }
+
+        calendarEventID = try container.decodeIfPresent(String.self, forKey: .calendarEventID)
+        teeTime = try container.decodeIfPresent(Date.self, forKey: .teeTime)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+
+        try container.encode(id, forKey: .id)
+        try container.encode(date, forKey: .date)
+        try container.encode(course, forKey: .course)
+        try container.encode(partners, forKey: .partners)
+        try container.encode(memo, forKey: .memo)
+        try container.encode(status, forKey: .status)
+        try container.encode(scores, forKey: .scores)
+        try container.encode(roundPhotoFileNames, forKey: .roundPhotoFileNames)
+        try container.encodeIfPresent(calendarEventID, forKey: .calendarEventID)
+        try container.encodeIfPresent(teeTime, forKey: .teeTime)
+    }
 }
+
 
 // ======================================================
 // SECTION 02 / Language Dictionary
@@ -101,14 +196,15 @@ func text(_ key: String, _ lang: AppLanguage) -> String {
         "add_partner": "동반자 추가",
         "no_partners": "동반자가 없습니다.",
         "scores_ranking": "스코어 / 순위",
-        "build_score_list": "스코어 입력 목록 새로고침",
+        "refresh_score_list": "스코어 명단 새로고침",
         "no_scores": "스코어가 없습니다.",
         "round_ranking": "라운드 순위",
         "my_rank": "나의 순위",
-        "score_image": "스코어 이미지",
-        "add_score_image": "스코어 이미지 추가/변경",
-        "view_score_image": "스코어 이미지 보기",
-        "delete_score_image": "스코어 이미지 삭제",
+        "round_photos": "라운드 사진",
+        "add_round_photos": "라운드 사진 추가",
+        "view_round_photos": "라운드 사진 보기",
+        "delete_photo": "사진 삭제",
+        "round_photos_attached": "라운드 사진 있음",
         "round_editor": "일정 편집",
         "save": "저장",
         "delete_round": "일정 삭제",
@@ -116,7 +212,6 @@ func text(_ key: String, _ lang: AppLanguage) -> String {
         "hide_names": "동반자 이름 숨기기",
         "no_rounds": "라운딩 기록이 없습니다.",
         "synced_calendar": "Apple 캘린더 동기화됨",
-        "score_image_attached": "스코어 이미지 있음",
         "round_summary": "라운딩 요약",
         "total_rounds": "전체 라운딩",
         "average_score": "평균 스코어",
@@ -136,19 +231,16 @@ func text(_ key: String, _ lang: AppLanguage) -> String {
         "english": "English",
         "create_backup": "백업 파일 만들기",
         "import_backup": "백업 파일 가져오기",
-        "backup_note": "라운딩 데이터는 JSON 파일로 백업됩니다. 스코어 이미지는 앱 내부 저장소에 보관됩니다.",
+        "backup_note": "라운딩 데이터는 JSON 파일로 백업됩니다. 라운드 사진은 앱 내부 저장소에 보관됩니다.",
         "app": "앱",
         "score": "스코어",
         "me": "나",
         "unable_load_image": "이미지를 불러올 수 없습니다.",
-        "unlock_reason": "동반자 이름 전체를 보려면 인증이 필요합니다.",
         "tee_time": "티오프 시간",
         "use_tee_time": "티오프 시간 입력",
         "map": "지도",
-        "open_apple_maps": "Apple 지도에서 골프장 보기",
         "open_google_maps": "Google 지도에서 골프장 보기",
-        "nearby_restaurants": "주변 맛집 검색",
-        "course_required": "골프장 이름을 먼저 입력하세요"
+        "nearby_restaurants": "주변 맛집 검색"
     ]
 
     let en: [String: String] = [
@@ -171,14 +263,15 @@ func text(_ key: String, _ lang: AppLanguage) -> String {
         "add_partner": "Add Partner",
         "no_partners": "No partners yet.",
         "scores_ranking": "Scores / Ranking",
-        "build_score_list": "Refresh Score List",
+        "refresh_score_list": "Refresh Score List",
         "no_scores": "No scores yet.",
         "round_ranking": "Round Ranking",
         "my_rank": "My Rank",
-        "score_image": "Score Image",
-        "add_score_image": "Add / Change Score Image",
-        "view_score_image": "View Score Image",
-        "delete_score_image": "Delete Score Image",
+        "round_photos": "Round Photos",
+        "add_round_photos": "Add Round Photos",
+        "view_round_photos": "View Round Photos",
+        "delete_photo": "Delete Photo",
+        "round_photos_attached": "Round photos attached",
         "round_editor": "Round Editor",
         "save": "Save",
         "delete_round": "Delete Round",
@@ -186,7 +279,6 @@ func text(_ key: String, _ lang: AppLanguage) -> String {
         "hide_names": "Hide Partner Names",
         "no_rounds": "No rounds recorded.",
         "synced_calendar": "Synced with Apple Calendar",
-        "score_image_attached": "Score image attached",
         "round_summary": "Round Summary",
         "total_rounds": "Total Rounds",
         "average_score": "Average Score",
@@ -206,19 +298,16 @@ func text(_ key: String, _ lang: AppLanguage) -> String {
         "english": "English",
         "create_backup": "Create Backup File",
         "import_backup": "Import Backup File",
-        "backup_note": "Round data is backed up as JSON. Score images are stored inside the app storage.",
+        "backup_note": "Round data is backed up as JSON. Round photos are stored inside the app storage.",
         "app": "App",
         "score": "Score",
         "me": "Me",
         "unable_load_image": "Unable to load image.",
-        "unlock_reason": "Unlock private partner names.",
         "tee_time": "Tee Time",
         "use_tee_time": "Use tee time",
         "map": "Map",
-        "open_apple_maps": "Open course in Apple Maps",
         "open_google_maps": "Open course in Google Maps",
-        "nearby_restaurants": "Search nearby restaurants",
-        "course_required": "Please enter a golf course first"
+        "nearby_restaurants": "Search nearby restaurants"
     ]
 
     return lang == .korean ? (ko[key] ?? key) : (en[key] ?? key)
@@ -257,14 +346,12 @@ class CalendarManager {
         if let id = round.calendarEventID,
            let event = eventStore.event(withIdentifier: id) {
             apply(round, to: event, lang: lang)
-
             do {
                 try eventStore.save(event, span: .thisEvent)
                 updated.calendarEventID = event.eventIdentifier
             } catch {
                 print("Calendar update failed:", error)
             }
-
             return updated
         }
 
@@ -283,10 +370,7 @@ class CalendarManager {
     }
 
     static func delete(_ identifier: String) {
-        guard let event = eventStore.event(withIdentifier: identifier) else {
-            return
-        }
-
+        guard let event = eventStore.event(withIdentifier: identifier) else { return }
         do {
             try eventStore.remove(event, span: .thisEvent)
         } catch {
@@ -301,25 +385,21 @@ class CalendarManager {
         if let teeTime = round.teeTime {
             let startDate = combinedDate(day: round.date, time: teeTime)
             let endDate = Calendar.current.date(byAdding: .hour, value: 5, to: startDate) ?? startDate
-
             event.startDate = startDate
             event.endDate = endDate
             event.isAllDay = false
         } else {
             let start = Calendar.current.startOfDay(for: round.date)
             let end = Calendar.current.date(byAdding: .day, value: 1, to: start) ?? start
-
             event.startDate = start
             event.endDate = end
             event.isAllDay = true
         }
 
         var notes = lang == .korean ? "GolfSchedulePro에서 생성한 일정입니다." : "Created by GolfSchedulePro."
-
         if !round.memo.isEmpty {
             notes += "\n\n\(text("memo", lang)): \(round.memo)"
         }
-
         event.notes = notes
     }
 
@@ -348,27 +428,20 @@ class GolfRoundStore: ObservableObject {
     @Published var rounds: [GolfRound] = GolfRoundStore.loadRounds()
 
     @Published var myName: String = UserDefaults.standard.string(forKey: "my_name") ?? "Me" {
-        didSet {
-            UserDefaults.standard.set(myName, forKey: "my_name")
-        }
+        didSet { UserDefaults.standard.set(myName, forKey: "my_name") }
     }
 
     @Published var language: AppLanguage = {
         let raw = UserDefaults.standard.string(forKey: "app_language") ?? AppLanguage.korean.rawValue
         return AppLanguage(rawValue: raw) ?? .korean
     }() {
-        didSet {
-            UserDefaults.standard.set(language.rawValue, forKey: "app_language")
-        }
+        didSet { UserDefaults.standard.set(language.rawValue, forKey: "app_language") }
     }
 
     private static let key = "golf_rounds_v2"
 
     static func loadRounds() -> [GolfRound] {
-        guard let data = UserDefaults.standard.data(forKey: key) else {
-            return []
-        }
-
+        guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
         do {
             return try JSONDecoder().decode([GolfRound].self, from: data)
         } catch {
@@ -387,9 +460,7 @@ class GolfRoundStore: ObservableObject {
     }
 
     func round(on date: Date) -> GolfRound? {
-        rounds.first {
-            Calendar.current.isDate($0.date, inSameDayAs: date)
-        }
+        rounds.first { Calendar.current.isDate($0.date, inSameDayAs: date) }
     }
 
     func upsert(_ round: GolfRound) {
@@ -405,7 +476,9 @@ class GolfRoundStore: ObservableObject {
         if let id = round.calendarEventID {
             CalendarManager.delete(id)
         }
-
+        for fileName in round.roundPhotoFileNames {
+            deleteRoundPhoto(fileName: fileName)
+        }
         rounds.removeAll { $0.id == round.id }
         save()
     }
@@ -427,15 +500,14 @@ class GolfRoundStore: ObservableObject {
         }
     }
 
-    func saveScoreImage(_ data: Data) -> String? {
+    func saveRoundPhoto(_ data: Data) -> String? {
         let fileName = UUID().uuidString + ".jpg"
         let url = documentsURL().appendingPathComponent(fileName)
-
         do {
             try data.write(to: url)
             return fileName
         } catch {
-            print("Image save failed:", error)
+            print("Photo save failed:", error)
             return nil
         }
     }
@@ -444,21 +516,25 @@ class GolfRoundStore: ObservableObject {
         documentsURL().appendingPathComponent(fileName)
     }
 
+    func deleteRoundPhoto(fileName: String) {
+        let url = imageURL(fileName: fileName)
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            print("Photo delete failed:", error)
+        }
+    }
+
     private func documentsURL() -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
 }
 
 struct BackupDocument: FileDocument {
-    static var readableContentTypes: [UTType] {
-        [.json]
-    }
-
+    static var readableContentTypes: [UTType] { [.json] }
     var data: Data
 
-    init(data: Data) {
-        self.data = data
-    }
+    init(data: Data) { self.data = data }
 
     init(configuration: ReadConfiguration) throws {
         self.data = configuration.file.regularFileContents ?? Data()
@@ -480,44 +556,31 @@ struct ContentView: View {
         TabView {
             CalendarView()
                 .environmentObject(store)
-                .tabItem {
-                    Label(text("calendar", store.language), systemImage: "calendar")
-                }
+                .tabItem { Label(text("calendar", store.language), systemImage: "calendar") }
 
             RoundListView()
                 .environmentObject(store)
-                .tabItem {
-                    Label(text("rounds", store.language), systemImage: "list.bullet")
-                }
+                .tabItem { Label(text("rounds", store.language), systemImage: "list.bullet") }
 
             StatsView()
                 .environmentObject(store)
-                .tabItem {
-                    Label(text("stats", store.language), systemImage: "chart.bar")
-                }
+                .tabItem { Label(text("stats", store.language), systemImage: "chart.bar") }
 
             BackupView()
                 .environmentObject(store)
-                .tabItem {
-                    Label(text("settings", store.language), systemImage: "gearshape")
-                }
+                .tabItem { Label(text("settings", store.language), systemImage: "gearshape") }
         }
-        .onAppear {
-            CalendarManager.requestAccess()
-        }
+        .onAppear { CalendarManager.requestAccess() }
     }
 }
 
 struct CalendarView: View {
     @EnvironmentObject var store: GolfRoundStore
-
     @State private var monthIndex = 0
     @State private var selectedDate: DateSelection?
 
     var weekdays: [String] {
-        store.language == .korean
-        ? ["일", "월", "화", "수", "목", "금", "토"]
-        : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        store.language == .korean ? ["일", "월", "화", "수", "목", "금", "토"] : ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
     }
 
     var currentMonth: Date {
@@ -528,13 +591,8 @@ struct CalendarView: View {
         NavigationStack {
             VStack(spacing: 8) {
                 HStack {
-                    Button {
-                        withAnimation {
-                            monthIndex -= 1
-                        }
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.title2)
+                    Button { withAnimation { monthIndex -= 1 } } label: {
+                        Image(systemName: "chevron.left").font(.title2)
                     }
 
                     Spacer()
@@ -545,13 +603,8 @@ struct CalendarView: View {
 
                     Spacer()
 
-                    Button {
-                        withAnimation {
-                            monthIndex += 1
-                        }
-                    } label: {
-                        Image(systemName: "chevron.right")
-                            .font(.title2)
+                    Button { withAnimation { monthIndex += 1 } } label: {
+                        Image(systemName: "chevron.right").font(.title2)
                     }
                 }
                 .padding(.horizontal)
@@ -581,7 +634,6 @@ struct CalendarView: View {
                 HStack(spacing: 20) {
                     Label(text("golf_round", store.language), systemImage: "circle.fill")
                         .foregroundColor(.green)
-
                     Label(text("unavailable", store.language), systemImage: "xmark")
                         .foregroundColor(.red)
                 }
@@ -593,11 +645,7 @@ struct CalendarView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if monthIndex != 0 {
-                        Button {
-                            withAnimation {
-                                monthIndex = 0
-                            }
-                        } label: {
+                        Button { withAnimation { monthIndex = 0 } } label: {
                             Label(text("today", store.language), systemImage: "calendar.circle")
                         }
                     }
@@ -624,7 +672,6 @@ struct CalendarView: View {
 
 struct MonthPageView: View {
     @EnvironmentObject var store: GolfRoundStore
-
     let monthDate: Date
     @Binding var selectedDate: DateSelection?
 
@@ -637,11 +684,7 @@ struct MonthPageView: View {
                     Button {
                         selectedDate = DateSelection(date: date)
                     } label: {
-                        DayCell(
-                            date: date,
-                            currentMonth: monthDate,
-                            round: store.round(on: date)
-                        )
+                        DayCell(date: date, currentMonth: monthDate, round: store.round(on: date))
                     }
                     .buttonStyle(.plain)
                     .contentShape(Rectangle())
@@ -703,17 +746,11 @@ struct DayCell: View {
                 .clipShape(Circle())
 
             if round?.status == .round {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 7, height: 7)
+                Circle().fill(Color.green).frame(width: 7, height: 7)
             } else if round?.status == .unavailable {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 7, height: 7)
+                Circle().fill(Color.red).frame(width: 7, height: 7)
             } else {
-                Circle()
-                    .fill(Color.clear)
-                    .frame(width: 7, height: 7)
+                Circle().fill(Color.clear).frame(width: 7, height: 7)
             }
         }
         .frame(height: 68)
@@ -726,16 +763,10 @@ struct DayCell: View {
         if !Calendar.current.isDate(date, equalTo: currentMonth, toGranularity: .month) {
             return .gray.opacity(0.4)
         }
-
         let weekday = Calendar.current.component(.weekday, from: date)
-
-        if weekday == 1 {
-            return .red
-        } else if weekday == 7 {
-            return .blue
-        } else {
-            return .primary
-        }
+        if weekday == 1 { return .red }
+        if weekday == 7 { return .blue }
+        return .primary
     }
 
     var todayBackground: Color {
@@ -743,13 +774,9 @@ struct DayCell: View {
     }
 
     var cellBackground: Color {
-        if round?.status == .round {
-            return Color.green.opacity(0.13)
-        } else if round?.status == .unavailable {
-            return Color.red.opacity(0.10)
-        } else {
-            return Color.gray.opacity(0.06)
-        }
+        if round?.status == .round { return Color.green.opacity(0.13) }
+        if round?.status == .unavailable { return Color.red.opacity(0.10) }
+        return Color.gray.opacity(0.06)
     }
 }
 
@@ -788,10 +815,10 @@ struct RoundEditorView: View {
     @State private var status: RoundStatus = .round
     @State private var scores: [PlayerScore] = []
     @State private var editingRound: GolfRound?
-    @State private var selectedPhoto: PhotosPickerItem?
-    @State private var scoreImageFileName: String?
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var roundPhotoFileNames: [String] = []
     @State private var calendarEventID: String?
-    @State private var showScoreImage = false
+    @State private var showPhotoGallery = false
     @State private var useTeeTime = false
     @State private var teeTime = Date()
 
@@ -816,7 +843,8 @@ struct RoundEditorView: View {
                     mapSection
                     partnersSection
                     scoresSection
-                    scoreImageSection
+                    visualRankingSection
+                    roundPhotosSection
                 } else {
                     Section(text("memo", store.language)) {
                         TextField(text("memo", store.language), text: $memo)
@@ -853,20 +881,23 @@ struct RoundEditorView: View {
             .onAppear {
                 loadRound()
             }
-            .onChange(of: selectedPhoto) { _, newItem in
+            .onChange(of: selectedPhotos) { _, newItems in
                 Task {
-                    if let data = try? await newItem?.loadTransferable(type: Data.self),
-                       let fileName = store.saveScoreImage(data) {
-                        scoreImageFileName = fileName
+                    for item in newItems {
+                        if let data = try? await item.loadTransferable(type: Data.self),
+                           let fileName = store.saveRoundPhoto(data) {
+                            roundPhotoFileNames.append(fileName)
+                        }
                     }
+
+                    selectedPhotos = []
                 }
             }
-            .sheet(isPresented: $showScoreImage) {
-                if let fileName = scoreImageFileName {
-                    ScoreImageView(imageURL: store.imageURL(fileName: fileName), lang: store.language)
-                } else {
-                    Text(text("no_score_data", store.language))
-                }
+            .sheet(isPresented: $showPhotoGallery) {
+                RoundPhotoGalleryView(
+                    photoFileNames: $roundPhotoFileNames,
+                    store: store
+                )
             }
         }
     }
@@ -920,10 +951,7 @@ struct RoundEditorView: View {
                             text("partner_name", store.language),
                             text: Binding(
                                 get: {
-                                    if partners.indices.contains(index) {
-                                        return partners[index]
-                                    }
-                                    return ""
+                                    partners.indices.contains(index) ? partners[index] : ""
                                 },
                                 set: { newValue in
                                     if partners.indices.contains(index) {
@@ -965,7 +993,7 @@ struct RoundEditorView: View {
 
     var scoresSection: some View {
         Section(text("scores_ranking", store.language)) {
-            Button(text("build_score_list", store.language)) {
+            Button(text("refresh_score_list", store.language)) {
                 syncScoreListWithPlayers()
             }
 
@@ -975,72 +1003,254 @@ struct RoundEditorView: View {
             }
 
             ForEach($scores) { $score in
+                CompactScoreDialRow(
+                    playerScore: $score,
+                    lang: store.language,
+                    revealPrivateInfo: store.revealPrivateInfo
+                )
+            }
+
+            Text(store.language == .korean ? "미입력은 순위/통계에 포함되지 않습니다." : "Not entered scores are excluded from rankings and stats.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    var visualRankingSection: some View {
+        Section(text("round_ranking", store.language)) {
+            if rankedScores().isEmpty {
+                Text(text("no_score_data", store.language))
+                    .foregroundColor(.gray)
+            } else {
+                VStack(spacing: 10) {
+                    if let winner = rankedScores().first {
+                        WinnerCard(
+                            rankText: "#1",
+                            name: displayName(winner.name, isMe: winner.isMe),
+                            score: scoreText(winner.score),
+                            isMe: winner.isMe
+                        )
+                    }
+
+                    ForEach(Array(rankedScores().dropFirst().enumerated()), id: \.element.id) { index, item in
+                        RankingCard(
+                            rankText: "#\(index + 2)",
+                            name: displayName(item.name, isMe: item.isMe),
+                            score: scoreText(item.score),
+                            isMe: item.isMe
+                        )
+                    }
+
+                    if let myRank = myRankText() {
+                        Text(myRank)
+                            .font(.headline)
+                            .foregroundColor(.blue)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    var roundPhotosSection: some View {
+        Section(text("round_photos", store.language)) {
+            PhotosPicker(
+                selection: $selectedPhotos,
+                maxSelectionCount: 20,
+                matching: .images
+            ) {
+                Text(text("add_round_photos", store.language))
+            }
+
+            if !roundPhotoFileNames.isEmpty {
+                Button("\(text("view_round_photos", store.language)) (\(roundPhotoFileNames.count))") {
+                    showPhotoGallery = true
+                }
+            }
+        }
+    }
+}
+
+struct CompactScoreDialRow: View {
+    @Binding var playerScore: PlayerScore
+
+    let lang: AppLanguage
+    let revealPrivateInfo: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(displayName)
+                        .font(.headline)
+
+                    if playerScore.isMe {
+                        Text("ME")
+                            .font(.caption2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
+            .frame(minWidth: 86, maxWidth: .infinity, alignment: .leading)
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(Color.blue.opacity(playerScore.score == nil ? 0.05 : 0.11))
+                    .frame(width: 104, height: 38)
+
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .fill(Color.blue.opacity(playerScore.score == nil ? 0.45 : 1.0))
+                        .frame(width: 2, height: 32)
+
+                    Picker(
+                        "",
+                        selection: Binding<Int>(
+                            get: {
+                                playerScore.score ?? 90
+                            },
+                            set: { newValue in
+                                playerScore.score = newValue
+                            }
+                        )
+                    ) {
+                        ForEach(50...150, id: \.self) { value in
+                            Text("\(value)")
+                                .font(.title3)
+                                .fontWeight(.semibold)
+                                .tag(value)
+                        }
+                    }
+                    .pickerStyle(.wheel)
+                    .frame(width: 78, height: 40)
+                    .clipped()
+                    .scaleEffect(0.72)
+                    .opacity(playerScore.score == nil ? 0.6 : 1.0)
+
+                    Rectangle()
+                        .fill(Color.blue.opacity(playerScore.score == nil ? 0.45 : 1.0))
+                        .frame(width: 2, height: 32)
+                }
+            }
+
+            Button {
+                playerScore.score = nil
+            } label: {
+                Text(lang == .korean ? "미입력" : "None")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .foregroundColor(.blue)
+                    .frame(width: 52, height: 28)
+                    .background(Color.gray.opacity(0.12))
+                    .cornerRadius(8)
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.vertical, 0)
+    }
+
+    var displayName: String {
+        if playerScore.isMe {
+            return playerScore.name
+        }
+
+        return revealPrivateInfo ? playerScore.name : maskName(playerScore.name)
+    }
+}
+
+struct WinnerCard: View {
+    let rankText: String
+    let name: String
+    let score: String
+    let isMe: Bool
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text("🏆")
+                .font(.largeTitle)
+
+            Text(rankText)
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Text(name)
+                .font(.title3)
+                .fontWeight(.bold)
+
+            Text(score)
+                .font(.title)
+                .fontWeight(.heavy)
+
+            if isMe {
+                Text("ME")
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.blue)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding()
+        .background(Color.yellow.opacity(0.18))
+        .cornerRadius(16)
+    }
+}
+
+struct RankingCard: View {
+    let rankText: String
+    let name: String
+    let score: String
+    let isMe: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(rankEmoji)
+                .font(.title2)
+                .frame(width: 34)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(rankText)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
                 HStack {
-                    Text(displayName(score.name, isMe: score.isMe))
-                        .frame(minWidth: 100, alignment: .leading)
+                    Text(name)
+                        .font(.headline)
 
-                    Spacer()
-
-                    TextField(text("score", store.language), value: $score.score, format: .number)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 70)
-
-                    if score.isMe {
-                        Text(text("me", store.language))
+                    if isMe {
+                        Text("ME")
                             .font(.caption)
+                            .fontWeight(.bold)
                             .foregroundColor(.blue)
                     }
                 }
             }
 
-            if !rankedScores().isEmpty {
-                Text(text("round_ranking", store.language))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 4)
+            Spacer()
 
-                ForEach(rankedScores()) { item in
-                    HStack {
-                        Text(rankOf(item))
-                            .frame(width: 35, alignment: .leading)
-
-                        Text(displayName(item.name, isMe: item.isMe))
-
-                        Spacer()
-
-                        Text("\(item.score)")
-                    }
-                }
-
-                if let myRank = myRankText() {
-                    Text(myRank)
-                        .font(.headline)
-                        .foregroundColor(.blue)
-                }
-            }
+            Text(score)
+                .font(.title3)
+                .fontWeight(.bold)
         }
+        .padding()
+        .background(Color.gray.opacity(0.08))
+        .cornerRadius(14)
     }
 
-    var scoreImageSection: some View {
-        Section(text("score_image", store.language)) {
-            PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                Text(text("add_score_image", store.language))
-            }
-
-            if scoreImageFileName != nil {
-                Button(text("view_score_image", store.language)) {
-                    showScoreImage = true
-                }
-
-                Button(text("delete_score_image", store.language)) {
-                    scoreImageFileName = nil
-                }
-                .foregroundColor(.red)
-            }
+    var rankEmoji: String {
+        if rankText == "#2" {
+            return "🥈"
+        } else if rankText == "#3" {
+            return "🥉"
+        } else {
+            return "⛳️"
         }
     }
 }
+
 
 // ======================================================
 // SECTION 08 / Editor Functions
@@ -1055,7 +1265,7 @@ extension RoundEditorView {
             memo = round.memo
             status = round.status
             scores = round.scores
-            scoreImageFileName = round.scoreImageFileName
+            roundPhotoFileNames = round.roundPhotoFileNames
             calendarEventID = round.calendarEventID
 
             if let savedTeeTime = round.teeTime {
@@ -1072,7 +1282,7 @@ extension RoundEditorView {
             memo = ""
             status = .round
             scores = []
-            scoreImageFileName = nil
+            roundPhotoFileNames = []
             calendarEventID = nil
             useTeeTime = false
             teeTime = Date()
@@ -1084,22 +1294,16 @@ extension RoundEditorView {
     func addPartner() {
         let name = newPartnerName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-
-        if !partners.contains(name) {
-            partners.append(name)
-        }
-
+        if !partners.contains(name) { partners.append(name) }
         newPartnerName = ""
         syncScoreListWithPlayers()
     }
 
     func removePartner(at index: Int) {
         guard partners.indices.contains(index) else { return }
-
         let name = partners[index]
         partners.remove(at: index)
         scores.removeAll { $0.name == name && !$0.isMe }
-
         syncScoreListWithPlayers()
     }
 
@@ -1110,10 +1314,7 @@ extension RoundEditorView {
         if let myIndex = scores.firstIndex(where: { $0.isMe }) {
             scores[myIndex].name = myDisplayName
         } else {
-            scores.insert(
-                PlayerScore(name: myDisplayName, score: 0, isMe: true),
-                at: 0
-            )
+            scores.insert(PlayerScore(name: myDisplayName, score: nil, isMe: true), at: 0)
         }
 
         let validPartners = partners
@@ -1130,7 +1331,7 @@ extension RoundEditorView {
             if let existing = scores.first(where: { !$0.isMe && $0.name == partner }) {
                 newScores.append(existing)
             } else {
-                newScores.append(PlayerScore(name: partner, score: 0, isMe: false))
+                newScores.append(PlayerScore(name: partner, score: nil, isMe: false))
             }
         }
 
@@ -1139,36 +1340,30 @@ extension RoundEditorView {
 
     func rankedScores() -> [PlayerScore] {
         scores
-            .filter { $0.score > 0 }
-            .sorted { $0.score < $1.score }
+            .filter { $0.score != nil }
+            .sorted { ($0.score ?? 999) < ($1.score ?? 999) }
     }
 
     func rankOf(_ score: PlayerScore) -> String {
         let ranked = rankedScores()
-
-        guard let index = ranked.firstIndex(where: { $0.id == score.id }) else {
-            return "-"
-        }
-
+        guard let index = ranked.firstIndex(where: { $0.id == score.id }) else { return "-" }
         return "#\(index + 1)"
     }
 
     func myRankText() -> String? {
         let ranked = rankedScores()
-
-        guard let index = ranked.firstIndex(where: { $0.isMe }) else {
-            return nil
-        }
-
+        guard let index = ranked.firstIndex(where: { $0.isMe }) else { return nil }
         return "\(text("my_rank", store.language)): #\(index + 1) / \(ranked.count)"
     }
 
     func displayName(_ name: String, isMe: Bool) -> String {
-        if isMe {
-            return name
-        }
-
+        if isMe { return name }
         return store.revealPrivateInfo ? name : maskName(name)
+    }
+
+    func scoreText(_ score: Int?) -> String {
+        if let score = score { return "\(score)" }
+        return "--"
     }
 
     func save() {
@@ -1182,7 +1377,7 @@ extension RoundEditorView {
             memo: memo,
             status: status,
             scores: status == .round ? scores : [],
-            scoreImageFileName: status == .round ? scoreImageFileName : nil,
+            roundPhotoFileNames: status == .round ? roundPhotoFileNames : [],
             calendarEventID: calendarEventID,
             teeTime: status == .round && useTeeTime ? teeTime : nil
         )
@@ -1197,9 +1392,7 @@ extension RoundEditorView {
             store.revealPrivateInfo = false
         } else {
             authenticateToReveal { success in
-                if success {
-                    store.revealPrivateInfo = true
-                }
+                if success { store.revealPrivateInfo = true }
             }
         }
     }
@@ -1213,35 +1406,237 @@ extension RoundEditorView {
 }
 
 // ======================================================
-// SECTION 09 / Score Image View & Round List
+// SECTION 09 / Round Photo Gallery & Round List
 // ======================================================
 
-struct ScoreImageView: View {
-    let imageURL: URL
-    let lang: AppLanguage
+struct RoundPhotoGalleryView: View {
+    @Binding var photoFileNames: [String]
+
+    @ObservedObject var store: GolfRoundStore
+    @Environment(\.dismiss) var dismiss
+
+    @State private var selectedIndex = 0
+    @State private var showDeleteAlert = false
 
     var body: some View {
         NavigationStack {
-            GeometryReader { geometry in
-                ZStack {
-                    Color.black.ignoresSafeArea()
+            ZStack {
+                Color.black.ignoresSafeArea()
 
-                    if let uiImage = UIImage(contentsOfFile: imageURL.path) {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(
-                                width: geometry.size.width,
-                                height: geometry.size.height
-                            )
-                    } else {
-                        Text(text("unable_load_image", lang))
-                            .foregroundColor(.white)
+                if photoFileNames.isEmpty {
+                    Text(text("no_data", store.language))
+                        .foregroundColor(.white)
+                } else {
+                    TabView(selection: $selectedIndex) {
+                        ForEach(Array(photoFileNames.enumerated()), id: \.element) { index, fileName in
+                            if let uiImage = loadImage(fileName: fileName) {
+                                ZoomableImageScrollView(image: uiImage)
+                                    .tag(index)
+                                    .ignoresSafeArea()
+                            } else {
+                                Text(text("unable_load_image", store.language))
+                                    .foregroundColor(.white)
+                                    .tag(index)
+                            }
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .automatic))
+                }
+            }
+            .navigationTitle(photoTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(store.language == .korean ? "닫기" : "Close") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if !photoFileNames.isEmpty {
+                        Button {
+                            showDeleteAlert = true
+                        } label: {
+                            Image(systemName: "trash")
+                                .foregroundColor(.red)
+                        }
                     }
                 }
             }
-            .navigationTitle(text("score_image", lang))
-            .navigationBarTitleDisplayMode(.inline)
+            .alert(
+                store.language == .korean ? "사진 삭제" : "Delete Photo",
+                isPresented: $showDeleteAlert
+            ) {
+                Button(store.language == .korean ? "삭제" : "Delete", role: .destructive) {
+                    deleteCurrentPhoto()
+                }
+
+                Button(store.language == .korean ? "취소" : "Cancel", role: .cancel) { }
+            } message: {
+                Text(store.language == .korean ? "현재 사진을 삭제할까요?" : "Delete this photo?")
+            }
+        }
+    }
+
+    var photoTitle: String {
+        if photoFileNames.isEmpty {
+            return text("round_photos", store.language)
+        }
+
+        return "\(text("round_photos", store.language)) \(selectedIndex + 1)/\(photoFileNames.count)"
+    }
+
+    func loadImage(fileName: String) -> UIImage? {
+        let url = store.imageURL(fileName: fileName)
+
+        if let image = UIImage(contentsOfFile: url.path) {
+            return image
+        }
+
+        if let data = try? Data(contentsOf: url),
+           let image = UIImage(data: data) {
+            return image
+        }
+
+        return nil
+    }
+
+    func deleteCurrentPhoto() {
+        guard photoFileNames.indices.contains(selectedIndex) else {
+            return
+        }
+
+        let fileName = photoFileNames[selectedIndex]
+        store.deleteRoundPhoto(fileName: fileName)
+        photoFileNames.remove(at: selectedIndex)
+
+        if selectedIndex >= photoFileNames.count {
+            selectedIndex = max(photoFileNames.count - 1, 0)
+        }
+    }
+}
+
+struct ZoomableImageScrollView: UIViewRepresentable {
+    let image: UIImage
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scrollView = UIScrollView()
+
+        scrollView.delegate = context.coordinator
+        scrollView.backgroundColor = .black
+        scrollView.minimumZoomScale = 1.0
+        scrollView.maximumZoomScale = 6.0
+        scrollView.bouncesZoom = true
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.alwaysBounceVertical = false
+        scrollView.alwaysBounceHorizontal = false
+        scrollView.contentInsetAdjustmentBehavior = .never
+
+        let imageView = UIImageView(image: image)
+        imageView.contentMode = .scaleAspectFit
+        imageView.isUserInteractionEnabled = true
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.tag = 100
+
+        scrollView.addSubview(imageView)
+
+        NSLayoutConstraint.activate([
+            imageView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+            imageView.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            imageView.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+            imageView.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
+            imageView.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor)
+        ])
+
+        let doubleTap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleDoubleTap(_:))
+        )
+        doubleTap.numberOfTapsRequired = 2
+        scrollView.addGestureRecognizer(doubleTap)
+
+        context.coordinator.scrollView = scrollView
+        context.coordinator.imageView = imageView
+
+        return scrollView
+    }
+
+    func updateUIView(_ scrollView: UIScrollView, context: Context) {
+        if let imageView = scrollView.viewWithTag(100) as? UIImageView {
+            imageView.image = image
+        }
+
+        scrollView.setZoomScale(1.0, animated: false)
+        context.coordinator.centerImage()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    class Coordinator: NSObject, UIScrollViewDelegate {
+        weak var scrollView: UIScrollView?
+        weak var imageView: UIImageView?
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+            imageView
+        }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            centerImage()
+        }
+
+        func centerImage() {
+            guard let scrollView = scrollView,
+                  let imageView = imageView else {
+                return
+            }
+
+            let boundsSize = scrollView.bounds.size
+            var frameToCenter = imageView.frame
+
+            if frameToCenter.size.width < boundsSize.width {
+                frameToCenter.origin.x = (boundsSize.width - frameToCenter.size.width) / 2
+            } else {
+                frameToCenter.origin.x = 0
+            }
+
+            if frameToCenter.size.height < boundsSize.height {
+                frameToCenter.origin.y = (boundsSize.height - frameToCenter.size.height) / 2
+            } else {
+                frameToCenter.origin.y = 0
+            }
+
+            imageView.frame = frameToCenter
+        }
+
+        @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+            guard let scrollView = scrollView else {
+                return
+            }
+
+            if scrollView.zoomScale > 1.0 {
+                scrollView.setZoomScale(1.0, animated: true)
+            } else {
+                let point = gesture.location(in: imageView)
+                let zoomScale: CGFloat = 2.7
+
+                let width = scrollView.bounds.width / zoomScale
+                let height = scrollView.bounds.height / zoomScale
+                let x = point.x - (width / 2)
+                let y = point.y - (height / 2)
+
+                let rect = CGRect(
+                    x: x,
+                    y: y,
+                    width: width,
+                    height: height
+                )
+
+                scrollView.zoom(to: rect, animated: true)
+            }
         }
     }
 }
@@ -1358,8 +1753,8 @@ struct RoundListYearPageView: View {
                                     .foregroundColor(.gray)
                             }
 
-                            if round.scoreImageFileName != nil {
-                                Text(text("score_image_attached", store.language))
+                            if !round.roundPhotoFileNames.isEmpty {
+                                Text("\(text("round_photos_attached", store.language)) \(round.roundPhotoFileNames.count)")
                                     .font(.caption)
                                     .foregroundColor(.green)
                             }
@@ -1393,8 +1788,8 @@ struct RoundListYearPageView: View {
 
     func myRankText(_ round: GolfRound) -> String? {
         let ranked = round.scores
-            .filter { $0.score > 0 }
-            .sorted { $0.score < $1.score }
+            .filter { $0.score != nil }
+            .sorted { ($0.score ?? 999) < ($1.score ?? 999) }
 
         guard let index = ranked.firstIndex(where: { $0.isMe }) else {
             return nil
@@ -1435,13 +1830,8 @@ struct StatsView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 HStack {
-                    Button {
-                        withAnimation {
-                            selectedYear -= 1
-                        }
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.title2)
+                    Button { withAnimation { selectedYear -= 1 } } label: {
+                        Image(systemName: "chevron.left").font(.title2)
                     }
 
                     Spacer()
@@ -1452,13 +1842,8 @@ struct StatsView: View {
 
                     Spacer()
 
-                    Button {
-                        withAnimation {
-                            selectedYear += 1
-                        }
-                    } label: {
-                        Image(systemName: "chevron.right")
-                            .font(.title2)
+                    Button { withAnimation { selectedYear += 1 } } label: {
+                        Image(systemName: "chevron.right").font(.title2)
                     }
                 }
                 .padding(.horizontal)
@@ -1476,9 +1861,7 @@ struct StatsView: View {
             .navigationTitle(text("stats", store.language))
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        togglePrivacy()
-                    } label: {
+                    Button { togglePrivacy() } label: {
                         Image(systemName: store.revealPrivateInfo ? "lock.open.fill" : "lock.fill")
                     }
                 }
@@ -1491,9 +1874,7 @@ struct StatsView: View {
             store.revealPrivateInfo = false
         } else {
             authenticateToReveal { success in
-                if success {
-                    store.revealPrivateInfo = true
-                }
+                if success { store.revealPrivateInfo = true }
             }
         }
     }
@@ -1501,21 +1882,19 @@ struct StatsView: View {
 
 struct StatsYearPageView: View {
     @EnvironmentObject var store: GolfRoundStore
-
     let year: Int
 
     var yearRounds: [GolfRound] {
         store.rounds.filter {
-            $0.status == .round &&
-            Calendar.current.component(.year, from: $0.date) == year
+            $0.status == .round && Calendar.current.component(.year, from: $0.date) == year
         }
     }
 
     var myScores: [Int] {
         yearRounds.flatMap { round in
             round.scores
-                .filter { $0.isMe && $0.score > 0 }
-                .map { $0.score }
+                .filter { $0.isMe && $0.score != nil }
+                .compactMap { $0.score }
         }
     }
 
@@ -1527,13 +1906,11 @@ struct StatsYearPageView: View {
                     Spacer()
                     Text("\(yearRounds.count)")
                 }
-
                 HStack {
                     Text(text("average_score", store.language))
                     Spacer()
                     Text(averageScoreText())
                 }
-
                 HStack {
                     Text(text("best_score", store.language))
                     Spacer()
@@ -1543,8 +1920,7 @@ struct StatsYearPageView: View {
 
             Section(text("golf_courses", store.language)) {
                 if rankCourses().isEmpty {
-                    Text(text("no_data", store.language))
-                        .foregroundColor(.gray)
+                    Text(text("no_data", store.language)).foregroundColor(.gray)
                 } else {
                     ForEach(rankCourses(), id: \.0) { item in
                         HStack {
@@ -1558,8 +1934,7 @@ struct StatsYearPageView: View {
 
             Section(text("partner_frequency", store.language)) {
                 if rankPartners().isEmpty {
-                    Text(text("no_data", store.language))
-                        .foregroundColor(.gray)
+                    Text(text("no_data", store.language)).foregroundColor(.gray)
                 } else {
                     ForEach(rankPartners(), id: \.0) { item in
                         HStack {
@@ -1573,8 +1948,7 @@ struct StatsYearPageView: View {
 
             Section(text("winner_ranking", store.language)) {
                 if winnerRanking().isEmpty {
-                    Text(text("no_score_data", store.language))
-                        .foregroundColor(.gray)
+                    Text(text("no_score_data", store.language)).foregroundColor(.gray)
                 } else {
                     ForEach(winnerRanking(), id: \.0) { item in
                         HStack {
@@ -1601,7 +1975,6 @@ struct StatsYearPageView: View {
 
     func rankCourses() -> [(String, Int)] {
         let names = yearRounds.map { $0.course }.filter { !$0.isEmpty }
-
         return Dictionary(grouping: names, by: { $0 })
             .map { ($0.key, $0.value.count) }
             .sorted { $0.1 > $1.1 }
@@ -1609,7 +1982,6 @@ struct StatsYearPageView: View {
 
     func rankPartners() -> [(String, Int)] {
         let names = yearRounds.flatMap { $0.partners }
-
         return Dictionary(grouping: names, by: { $0 })
             .map { ($0.key, $0.value.count) }
             .sorted { $0.1 > $1.1 }
@@ -1617,17 +1989,14 @@ struct StatsYearPageView: View {
 
     func winnerRanking() -> [(String, Int)] {
         var winners: [String] = []
-
         for round in yearRounds {
             let ranked = round.scores
-                .filter { $0.score > 0 }
-                .sorted { $0.score < $1.score }
-
+                .filter { $0.score != nil }
+                .sorted { ($0.score ?? 999) < ($1.score ?? 999) }
             if let winner = ranked.first {
                 winners.append(winner.name)
             }
         }
-
         return Dictionary(grouping: winners, by: { $0 })
             .map { ($0.key, $0.value.count) }
             .sorted { $0.1 > $1.1 }
@@ -1640,7 +2009,6 @@ struct StatsYearPageView: View {
 
 struct BackupView: View {
     @EnvironmentObject var store: GolfRoundStore
-
     @State private var showExporter = false
     @State private var showImporter = false
 
@@ -1664,27 +2032,17 @@ struct BackupView: View {
                 }
 
                 Section(text("backup", store.language)) {
-                    Button(text("create_backup", store.language)) {
-                        showExporter = true
-                    }
-
-                    Button(text("import_backup", store.language)) {
-                        showImporter = true
-                    }
-
+                    Button(text("create_backup", store.language)) { showExporter = true }
+                    Button(text("import_backup", store.language)) { showImporter = true }
                     Text(text("backup_note", store.language))
                         .font(.caption)
                         .foregroundColor(.gray)
                 }
 
                 Section(text("app", store.language)) {
-                    Text("GolfSchedulePro V2")
-                    Text(
-                        store.language == .korean
-                        ? "한국어 / 영어 선택 버전"
-                        : "Korean / English selectable version"
-                    )
-                    .foregroundColor(.secondary)
+                    Text("GolfSchedulePro V3")
+                    Text(store.language == .korean ? "한국어 / 영어 선택 버전" : "Korean / English selectable version")
+                        .foregroundColor(.secondary)
                 }
             }
             .navigationTitle(text("settings", store.language))
@@ -1701,20 +2059,13 @@ struct BackupView: View {
                 allowedContentTypes: [.json]
             ) { result in
                 switch result {
-
                 case .success(let url):
-
                     if url.startAccessingSecurityScopedResource() {
-
-                        defer {
-                            url.stopAccessingSecurityScopedResource()
-                        }
-
+                        defer { url.stopAccessingSecurityScopedResource() }
                         if let data = try? Data(contentsOf: url) {
                             store.importBackup(data)
                         }
                     }
-
                 case .failure:
                     print("Import failed")
                 }
@@ -1724,83 +2075,46 @@ struct BackupView: View {
 }
 
 func maskedPartnerNames(_ names: [String], revealed: Bool) -> String {
-    if revealed {
-        return names.joined(separator: ", ")
-    }
-
-    return names.map { maskName($0) }
-        .joined(separator: ", ")
+    if revealed { return names.joined(separator: ", ") }
+    return names.map { maskName($0) }.joined(separator: ", ")
 }
 
 func maskName(_ name: String) -> String {
     let chars = Array(name)
-
-    if chars.count <= 1 {
-        return name
-    } else if chars.count == 2 {
-        return "\(chars[0])*"
-    } else {
-        var masked = chars
-        masked[1] = "*"
-        return String(masked)
-    }
+    if chars.count <= 1 { return name }
+    if chars.count == 2 { return "\(chars[0])*" }
+    var masked = chars
+    masked[1] = "*"
+    return String(masked)
 }
 
-func authenticateToReveal(
-    completion: @escaping (Bool) -> Void
-) {
+func authenticateToReveal(completion: @escaping (Bool) -> Void) {
     let context = LAContext()
     var error: NSError?
 
-    if context.canEvaluatePolicy(
-        .deviceOwnerAuthentication,
-        error: &error
-    ) {
+    if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {
         context.evaluatePolicy(
             .deviceOwnerAuthentication,
             localizedReason: "Unlock private partner names."
         ) { success, _ in
-            DispatchQueue.main.async {
-                completion(success)
-            }
+            DispatchQueue.main.async { completion(success) }
         }
     } else {
         completion(false)
     }
 }
 
-// MARK: - Google Maps
-
-func openGoogleMaps(
-    course: String,
-    lang: AppLanguage
-) {
-    let query = normalizedGoogleCourseQuery(
-        course,
-        lang: lang
-    )
-
-    guard !query.isEmpty else {
-        return
-    }
-
+func openGoogleMaps(course: String, lang: AppLanguage) {
+    let query = normalizedGoogleCourseQuery(course, lang: lang)
+    guard !query.isEmpty else { return }
     openGoogleMapsSearch(query)
 }
 
-func openNearbyRestaurants(
-    course: String,
-    lang: AppLanguage
-) {
-    let trimmedCourse = course.trimmingCharacters(
-        in: .whitespacesAndNewlines
-    )
-
-    guard !trimmedCourse.isEmpty else {
-        return
-    }
+func openNearbyRestaurants(course: String, lang: AppLanguage) {
+    let trimmedCourse = course.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedCourse.isEmpty else { return }
 
     let query: String
-
     if lang == .korean {
         query = "\(trimmedCourse) 골프장 근처 맛집"
     } else {
@@ -1810,17 +2124,9 @@ func openNearbyRestaurants(
     openGoogleMapsSearch(query)
 }
 
-func normalizedGoogleCourseQuery(
-    _ course: String,
-    lang: AppLanguage
-) -> String {
-    let trimmed = course.trimmingCharacters(
-        in: .whitespacesAndNewlines
-    )
-
-    guard !trimmed.isEmpty else {
-        return ""
-    }
+func normalizedGoogleCourseQuery(_ course: String, lang: AppLanguage) -> String {
+    let trimmed = course.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return "" }
 
     if lang == .korean {
         return "\(trimmed) 골프장"
@@ -1829,25 +2135,9 @@ func normalizedGoogleCourseQuery(
     }
 }
 
-func openGoogleMapsSearch(
-    _ query: String
-) {
-    let encoded =
-        query.addingPercentEncoding(
-            withAllowedCharacters: .urlQueryAllowed
-        ) ?? query
-
-    let appURLString =
-        "comgooglemaps://?q=\(encoded)"
-
-    let webURLString =
-        "https://www.google.com/maps/search/?api=1&query=\(encoded)"
-
-    if let appURL = URL(string: appURLString),
-       UIApplication.shared.canOpenURL(appURL) {
-        UIApplication.shared.open(appURL)
-        return
-    }
+func openGoogleMapsSearch(_ query: String) {
+    let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+    let webURLString = "https://www.google.com/maps/search/?api=1&query=\(encoded)"
 
     if let webURL = URL(string: webURLString) {
         UIApplication.shared.open(webURL)
@@ -1857,3 +2147,4 @@ func openGoogleMapsSearch(
 #Preview {
     ContentView()
 }
+
